@@ -12,6 +12,7 @@ void bloom_fractal_init(bloom_fractal_t *f, uint32_t seed, uint8_t length,
     f->seed = seed;
     f->previous_seed = seed;
     f->bar = 0;
+    f->temporary_epoch = 0;
     f->length = length < 1 ? 1 : length > 64 ? 64 : length;
     f->depth = 4;
     f->branch = 0;
@@ -24,6 +25,7 @@ void bloom_fractal_init(bloom_fractal_t *f, uint32_t seed, uint8_t length,
     f->root = root;
     f->frozen = false;
     f->undo_valid = false;
+    f->temporary_active = false;
     for (uint8_t i = 0; i < BLOOM_MAX_STEPS; i++) {
         bloom_step_t empty = {0};
         f->trunk[i] = f->original[i] = f->undo[i] = empty;
@@ -67,6 +69,20 @@ uint8_t bloom_fractal_select_branch(bloom_fractal_t *f, uint32_t bar)
     return branch;
 }
 
+static bloom_step_t mutated_step(const bloom_fractal_t *f, bloom_step_t s,
+                                 uint8_t index, uint32_t epoch)
+{
+    uint32_t h = bloom_hash4(f->seed, epoch, index, 0x4d555441u);
+    if (h % 100u >= f->mutation_probability) return s;
+    int range = 1 + (int)((uint16_t)f->pitch_range * f->mutation_intensity / 100u);
+    int delta = (int)((h >> 8) % (uint32_t)(range * 2 + 1)) - range;
+    s.note = bloom_scale_note((int)s.note - f->root + delta, f->root, f->scale, 0, 127);
+    int gd = (int)((h >> 16) % 9u) - 4;
+    int gate = (int)s.gate + gd * f->mutation_intensity / 20;
+    s.gate = (uint8_t)(gate < 5 ? 5 : gate > 95 ? 95 : gate);
+    return s;
+}
+
 bloom_step_t bloom_fractal_step(const bloom_fractal_t *f, uint32_t absolute_step)
 {
     uint8_t index = (uint8_t)(absolute_step % f->length);
@@ -81,29 +97,31 @@ bloom_step_t bloom_fractal_step(const bloom_fractal_t *f, uint32_t absolute_step
         if ((h >> 12) % 100u < 8u + level * 2u)
             s.flags ^= BLOOM_STEP_ENABLED;
         if ((h >> 20) % 100u < 12u) s.ratchets = (uint8_t)(2u + h % 2u);
+        if ((h >> 16) % 100u < 15u) {
+            int probability = (int)s.probability + (int)((h >> 24) % 21u) - 10;
+            s.probability = (uint8_t)(probability < 20 ? 20 : probability > 100 ? 100 : probability);
+        }
         int gate_delta = (int)((h >> 24) % 11u) - 5;
         int gate = (int)s.gate + gate_delta;
         s.gate = (uint8_t)(gate < 5 ? 5 : gate > 95 ? 95 : gate);
     }
+    if (f->temporary_active) s = mutated_step(f, s, index, f->temporary_epoch);
     return s;
 }
 
 void bloom_fractal_mutate(bloom_fractal_t *f, uint32_t epoch, bool persistent)
 {
     if (f->frozen) return;
+    if (!persistent) {
+        f->temporary_epoch = epoch;
+        f->temporary_active = true;
+        return;
+    }
     if (persistent) { copy_steps(f->undo, f->trunk, f->length); f->undo_valid = true; }
     for (uint8_t i = 0; i < f->length; i++) {
-        uint32_t h = bloom_hash4(f->seed, epoch, i, 0x4d555441u);
-        if (h % 100u >= f->mutation_probability) continue;
-        int range = 1 + (int)((uint16_t)f->pitch_range * f->mutation_intensity / 100u);
-        int delta = (int)((h >> 8) % (uint32_t)(range * 2 + 1)) - range;
-        bloom_step_t s = f->trunk[i];
-        s.note = bloom_scale_note((int)s.note - f->root + delta, f->root, f->scale, 0, 127);
-        int gd = (int)((h >> 16) % 9u) - 4;
-        int gate = (int)s.gate + gd * f->mutation_intensity / 20;
-        s.gate = (uint8_t)(gate < 5 ? 5 : gate > 95 ? 95 : gate);
-        if (persistent) f->trunk[i] = s;
+        f->trunk[i] = mutated_step(f, f->trunk[i], i, epoch);
     }
+    f->temporary_active = false;
 }
 
 bool bloom_fractal_undo(bloom_fractal_t *f)
@@ -111,6 +129,7 @@ bool bloom_fractal_undo(bloom_fractal_t *f)
     if (!f->undo_valid) return false;
     copy_steps(f->trunk, f->undo, f->length);
     f->undo_valid = false;
+    f->temporary_active = false;
     return true;
 }
 
@@ -118,7 +137,10 @@ void bloom_fractal_restore(bloom_fractal_t *f)
 {
     copy_steps(f->trunk, f->original, f->length);
     f->undo_valid = false;
+    f->temporary_active = false;
 }
+
+void bloom_fractal_clear_temporary(bloom_fractal_t *f) { f->temporary_active = false; }
 
 void bloom_fractal_reseed(bloom_fractal_t *f, uint32_t seed, bool notes, bool rhythm)
 {

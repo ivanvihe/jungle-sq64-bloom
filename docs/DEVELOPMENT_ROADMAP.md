@@ -10,15 +10,15 @@
 | Fractal trunk/branch/path | Implemented and tested | 64 steps, eight lazy levels, six paths, return-to-trunk. |
 | Mutation/undo/restore | Implemented and tested | Engine layer; temporary mutation and panel editing partial. |
 | Euclidean engine | Implemented and tested | 1–64, pulses/rotation; evolution/fills/accent scheduling partial. |
-| Firmware routing | Implemented but not validated | Emulator smoke boot; detailed generative event capture pending. |
+| Ratchet event scheduler | Implemented and tested | 72 static events, 1–8 ratchets, wrap, overflow and stop cleanup. |
+| Random Walk/Weighted/Markov/Arp/Harmony | Implemented and tested | Host determinism plus WASM track-C acceptance. |
+| Firmware routing | Implemented and tested | Native MIDI replay plus browser panel/CV/MIDI tests. |
 | Performance UI | Partial | Toggle/reseed/freeze vertical slice only. |
-| Ratchets/ornaments/slew | Partial | Data model/branch generation only; scheduler pending. |
+| Ratchets/ornaments/slew | Partial | Ratchets scheduled; grace notes, trills and slew pending. |
 | External MIDI/analog sync | Not implemented | Incoming start/stop only from upstream. |
-| Random Walk/Weighted/Markov/Arp/Harmony | Not implemented | Phase 3. |
-| Versioned project persistence | Not implemented | Legacy settings/project format does not save generative state. |
-| Browser acceptance scripts | Partial | Upstream scripts retained; new generative scripts pending. |
+| Versioned project persistence | Partial | `JBLM` v1 codec and corruption tests pass; physical slot integration blocked. |
+| Browser acceptance scripts | Implemented and tested | Update, panel/storage and all track-C engines covered. |
 | Physical hardware | Blocked by hardware verification | See `HARDWARE_SAFETY.md`. |
 
-Next milestone: introduce a transport/event-queue module with ratchet-safe
-note-offs, per-track division/multiplication and external-clock state tests;
-then persist versioned engine state and expose the nine-page UI.
+Next milestone: per-track division/multiplication and external-clock state
+tests, then the nine-page UI and emulator-only integration of `JBLM` snapshots.

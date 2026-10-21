@@ -35,8 +35,10 @@ shallow branches; evolving drifts over multiple bars. Return-to-trunk is a
 separate deterministic probability.
 
 Persistent mutation snapshots the trunk once for undo, applies scale-aware
-pitch/gate edits, and can restore the immutable original. Freeze rejects new
-mutation. Reseed can independently replace notes and rhythm fields.
+pitch/gate edits, and can restore the immutable original. Temporary mutation
+stores only an epoch and is applied lazily, so clearing it restores the exact
+trunk without another 64-step buffer. Freeze rejects new mutation. Reseed can
+independently replace notes and rhythm fields.
 
 ## Euclidean rhythm
 
@@ -44,3 +46,27 @@ The implementation uses the equivalent modular form of Bjorklund distribution:
 step `i` is active when `((i - rotation) * pulses) mod steps < pulses`.
 It has fixed O(steps) pattern generation, O(1) hit testing and exactly the
 requested pulse count for every 1–64-step configuration.
+
+## Additional engines
+
+- Random Walk supports biased direction, 1–N step sizes, center attraction and
+  clamp/wrap/reflect boundaries before scale quantization.
+- Weighted Random independently weights twelve scale degrees and four octave
+  bands, with repeat and rest probability.
+- Markov Melody contains explicit first-order and second-order transition
+  tables over eight scale states. Defaults favor small motion, repetition and
+  contrary motion.
+- Arpeggiator supports up, down, alternating and deterministic-random traversal
+  over eight configurable chord degrees with octave probability.
+- Harmonic Generator selects a progression by bar, applies major/minor/
+  diminished/suspended intervals and requantizes to the shared scale.
+
+## Scheduling and persistence
+
+Each note request expands into up to eight evenly spaced ratchet note-on/off
+pairs. Gate percentage applies within each ratchet slice. The fixed 72-event
+queue handles millisecond wraparound and refuses over-capacity groups atomically.
+
+Project records use little-endian fields, magic `JBLM`, version 1, declared
+length and CRC32 over the payload. Decode performs both checksum and musical
+range validation before accepting a project.

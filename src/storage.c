@@ -39,6 +39,22 @@ static void write_enable(void)
     cs(false);
 }
 
+/* Poll the standard WIP bit after every mutating command. The browser model
+ * deliberately gives erase/program positive duration; issuing the next
+ * command while busy is rejected. The bound prevents corrupt hardware from
+ * trapping the UI forever. Readback remains the final success criterion. */
+static bool wait_ready(void)
+{
+    for (uint32_t attempt = 0; attempt < 100000u; attempt++) {
+        cs(true);
+        xfer(0x05);
+        uint8_t status = xfer(0);
+        cs(false);
+        if (!(status & 1u)) return true;
+    }
+    return false;
+}
+
 void spi_flash_read(uint32_t address, uint8_t *data, uint32_t length)
 {
     cs(true);
@@ -53,6 +69,7 @@ void spi_flash_erase_4k(uint32_t address)
     cs(true);
     command_address(0x20, address);
     cs(false);
+    (void)wait_ready();
 }
 
 void spi_flash_erase_64k(uint32_t address)
@@ -61,6 +78,7 @@ void spi_flash_erase_64k(uint32_t address)
     cs(true);
     command_address(0xd8, address);
     cs(false);
+    (void)wait_ready();
 }
 
 void spi_flash_program(uint32_t address, const uint8_t *data, uint32_t length)
@@ -73,6 +91,7 @@ void spi_flash_program(uint32_t address, const uint8_t *data, uint32_t length)
         command_address(0x02, address);
         for (uint32_t i = 0; i < chunk; i++) xfer(data[i]);
         cs(false);
+        if (!wait_ready()) return;
         address += chunk;
         data += chunk;
         length -= chunk;

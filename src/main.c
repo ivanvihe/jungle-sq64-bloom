@@ -32,6 +32,10 @@
 #include "../firmware/engines/euclidean.h"
 #include "../firmware/engines/fractal.h"
 #include "../firmware/engines/turing.h"
+#include "../firmware/engines/generative.h"
+#include "../firmware/storage/project_codec.h"
+#include "../firmware/core/scheduler.h"
+#include "../firmware/core/prng.h"
 
 /* The browser engine's patched TCI interpreter has a fixed translation
  * budget per basic block (about 120 simple instructions, fewer for
@@ -55,8 +59,6 @@ static uint32_t global_step;
 static uint32_t next_step256;   /* ms << 8 timestamps, wrap-safe compares */
 static uint32_t next_clock256;
 static uint8_t active_note[4] = {0xff, 0xff, 0xff, 0xff};
-static uint32_t gate_off_ms[4];
-static uint32_t trigger_off_ms;
 static uint32_t beat_flash_ms;
 static uint32_t tap_last_ms;
 static bool ui_dirty = true;
@@ -66,6 +68,14 @@ static bloom_turing_t turing;
 static bool generative_mode;
 static bool generative_frozen;
 static uint32_t generation_seed = 0x4a534236u;
+static bloom_scheduler_t scheduler;
+static bloom_random_walk_t random_walk;
+static bloom_weighted_t weighted;
+static bloom_markov_t markov;
+static bloom_arp_t arpeggiator;
+static bloom_harmony_t harmony;
+static bloom_engine_t track_c_engine = BLOOM_ENGINE_EUCLIDEAN;
+static uint8_t last_c_note = 60;
 
 /* Edit modes (MODE-001): the PITCH/GATE/MOD/CONTROL keys scope what the
  * pads edit on the selected track; pressing the active mode's key again
@@ -124,6 +134,27 @@ static void note_off(int track)
     }
 }
 
+static void dispatch_event(const bloom_event_t *event, void *context)
+{
+    (void)context;
+    int track = event->track;
+    if (event->type == BLOOM_EVENT_NOTE_OFF) {
+        if (active_note[track] == event->note) note_off(track);
+        if (track == 3) panel_triggers(0);
+        return;
+    }
+    note_off(track);
+    send_note_velocity(track, 0x90, event->note, event->velocity);
+    active_note[track] = event->note;
+    if (track < 3) {
+        gate_set(track, true);
+        cv_pitch(track, event->note);
+        cv_mod(track, event->modulation);
+    } else {
+        panel_triggers(1);
+    }
+}
+
 static void fire_step(uint32_t now)
 {
     uint32_t period = step_period256() >> 8;
@@ -134,32 +165,50 @@ static void fire_step(uint32_t now)
         uint8_t velocity = c->velocity;
         uint8_t gate_pct = c->gate_pct;
         uint8_t mod = (uint8_t)(c->mod * 17);
+        uint8_t ratchets = 1;
         bool hit = ((euclid_pattern(c) >> pos) & 1u) != 0;
         if (generative_mode && t == 0) {
             if (!(global_step % 16u)) bloom_fractal_select_branch(&fractal, global_step / 16u);
             bloom_step_t s = bloom_fractal_step(&fractal, global_step);
-            hit = (s.flags & BLOOM_STEP_ENABLED) != 0;
+            hit = (s.flags & BLOOM_STEP_ENABLED) != 0
+                && bloom_hash4(fractal.seed, global_step, fractal.branch, 0x50524f42u) % 100u
+                   < s.probability;
             note = s.note;
             velocity = s.velocity;
             gate_pct = s.gate;
             mod = s.modulation;
+            ratchets = s.ratchets;
         } else if (generative_mode && t == 1) {
             hit = bloom_turing_tick(&turing, &note, &velocity);
+        } else if (generative_mode && t == 2) {
+            if (generative_frozen && track_c_engine != BLOOM_ENGINE_EUCLIDEAN) {
+                note = last_c_note;
+                hit = true;
+            } else switch (track_c_engine) {
+            case BLOOM_ENGINE_RANDOM_WALK:
+                note = bloom_random_walk_tick(&random_walk);
+                hit = true;
+                break;
+            case BLOOM_ENGINE_WEIGHTED:
+                hit = bloom_weighted_tick(&weighted, &note);
+                break;
+            case BLOOM_ENGINE_MARKOV:
+                hit = bloom_markov_tick(&markov, &note);
+                break;
+            case BLOOM_ENGINE_ARPEGGIATOR:
+                note = bloom_arp_tick(&arpeggiator);
+                break;
+            case BLOOM_ENGINE_HARMONIC:
+                note = bloom_harmony_note(&harmony, global_step / 16u,
+                                          (uint8_t)pos, 0, 36, 84);
+                break;
+            default: break;
+            }
+            if (hit) last_c_note = note;
         }
         if (!hit) continue;
-        note_off(t);
-        send_note_velocity(t, 0x90, note, velocity);
-        active_note[t] = note;
-        uint32_t gate = period * gate_pct / 100;
-        gate_off_ms[t] = now + (gate < 5 ? 5 : gate);
-        if (t < 3) {
-            gate_set(t, true);
-            cv_pitch(t, note);
-            cv_mod(t, mod);
-        } else {
-            panel_triggers(1);
-            trigger_off_ms = now + 20;
-        }
+        bloom_scheduler_note(&scheduler, now, period, (uint8_t)t, note,
+                             velocity, mod, gate_pct, ratchets);
     }
     if (global_step % 4 == 0) beat_flash_ms = now + 60;
     global_step++;
@@ -171,6 +220,9 @@ static void fire_step(uint32_t now)
 
 static void transport_start(void)
 {
+    bloom_scheduler_clear(&scheduler);
+    for (int t = 0; t < 4; t++) note_off(t);
+    panel_triggers(0);
     playing = true;
     global_step = loop_on ? loop_start : 0;
     next_step256 = now256();
@@ -182,6 +234,7 @@ static void transport_start(void)
 static void transport_stop(void)
 {
     playing = false;
+    bloom_scheduler_clear(&scheduler);
     for (int t = 0; t < 4; t++) note_off(t);
     panel_triggers(0);
     midi_send((const uint8_t[]){0xfc}, 1);
@@ -191,13 +244,7 @@ static void transport_stop(void)
 static NOINLINE void sequencer_tick(void)
 {
     uint32_t now = g_ms;
-    for (int t = 0; t < 4; t++)
-        if (active_note[t] != 0xff && (int32_t)(now - gate_off_ms[t]) >= 0)
-            note_off(t);
-    if (trigger_off_ms && (int32_t)(now - trigger_off_ms) >= 0) {
-        panel_triggers(0);
-        trigger_off_ms = 0;
-    }
+    bloom_scheduler_poll(&scheduler, now, dispatch_event, 0);
     if (!playing) return;
     uint32_t t256 = now256();
     if ((int32_t)(t256 - next_clock256) >= 0) {
@@ -369,6 +416,15 @@ static NOINLINE void handle_events(void)
                 generation_seed += 0x9e3779b9u;
                 bloom_fractal_reseed(&fractal, generation_seed, true, true);
                 bloom_turing_reseed(&turing, generation_seed ^ 0x5455524eu);
+                bloom_random_walk_init(&random_walk, generation_seed ^ 0x57414c4bu, 36, 72);
+                random_walk.root = cfg.track[2].note;
+                random_walk.scale = BLOOM_SCALE_DORIAN;
+                bloom_weighted_init(&weighted, generation_seed ^ 0x57454947u,
+                                    cfg.track[2].note, BLOOM_SCALE_DORIAN);
+                bloom_markov_init(&markov, generation_seed ^ 0x4d41524bu,
+                                  cfg.track[2].note, BLOOM_SCALE_DORIAN, 2);
+                bloom_arp_init(&arpeggiator, generation_seed ^ 0x41525000u,
+                               cfg.track[2].note, BLOOM_SCALE_DORIAN);
             } else {
                 generative_mode = !generative_mode;
             }
@@ -387,7 +443,17 @@ static NOINLINE void handle_events(void)
         }
         case SW_TRACK_A: if (!project_mode) { cfg.selected = 0; ui_dirty = true; } continue;
         case SW_TRACK_B: if (!project_mode) { cfg.selected = 1; ui_dirty = true; } continue;
-        case SW_TRACK_C: if (!project_mode) { cfg.selected = 2; ui_dirty = true; } continue;
+        case SW_TRACK_C:
+            if (!project_mode) {
+                cfg.selected = 2;
+                if (panel_down(SW_SHIFT)) {
+                    track_c_engine = (bloom_engine_t)(track_c_engine + 1);
+                    if (track_c_engine >= BLOOM_ENGINE_COUNT)
+                        track_c_engine = BLOOM_ENGINE_EUCLIDEAN;
+                }
+                ui_dirty = true;
+            }
+            continue;
         case SW_TRACK_D: if (!project_mode) { cfg.selected = 3; ui_dirty = true; } continue;
         case SW_PITCH:   if (!project_mode) { edit_mode = edit_mode == MODE_PITCH   ? MODE_EUCLID : MODE_PITCH;   ui_dirty = true; } continue;
         case SW_GATE:    if (!project_mode) { edit_mode = edit_mode == MODE_GATE    ? MODE_EUCLID : MODE_GATE;    ui_dirty = true; } continue;
@@ -600,11 +666,16 @@ static NOINLINE void draw_ui(void)
         }
     }
     static const char *const MODE_NAMES[5] = {"EUCLID", "PITCH", "GATE", "MOD", "CTRL"};
+    static const char *const C_ENGINE_NAMES[BLOOM_ENGINE_COUNT] = {
+        "FRACT", "TURING", "EUCLID", "WALK", "WEIGHT", "MARKOV", "ARP", "HARM",
+    };
     fb_text(2, 57, MODE_NAMES[edit_mode], 5);
     fb_text(46, 57, "BAR", 5);
     fb_number(70, 57, edit_bar + 1, 5);
     if (loop_on) fb_text(84, 57, "LOOP", 12);
     if (generative_frozen) fb_text(116, 57, "FREEZE", 12);
+    if (generative_mode && cfg.selected == 2)
+        fb_text(116, 57, C_ENGINE_NAMES[track_c_engine], 12);
     fb_text(168, 57, "GLOBAL SAVES", 5);
     display_flush();
 }
@@ -633,6 +704,7 @@ static void realtime_in(uint8_t byte)
 static NOINLINE void normal_main(void)
 {
     settings_load(&cfg);
+    bloom_scheduler_init(&scheduler);
     bloom_fractal_init(&fractal, generation_seed, cfg.track[0].length,
                        cfg.track[0].note, BLOOM_SCALE_DORIAN);
     fractal.path = BLOOM_PATH_ALTERNATING;
@@ -642,6 +714,16 @@ static NOINLINE void normal_main(void)
     turing.high_note = (uint8_t)(cfg.track[1].note > 103 ? 127 : cfg.track[1].note + 24);
     turing.scale = BLOOM_SCALE_NATURAL_MINOR;
     turing.mutation = 8;
+    bloom_random_walk_init(&random_walk, generation_seed ^ 0x57414c4bu, 36, 72);
+    random_walk.root = cfg.track[2].note;
+    random_walk.scale = BLOOM_SCALE_DORIAN;
+    bloom_weighted_init(&weighted, generation_seed ^ 0x57454947u,
+                        cfg.track[2].note, BLOOM_SCALE_DORIAN);
+    bloom_markov_init(&markov, generation_seed ^ 0x4d41524bu,
+                      cfg.track[2].note, BLOOM_SCALE_DORIAN, 2);
+    bloom_arp_init(&arpeggiator, generation_seed ^ 0x41525000u,
+                   cfg.track[2].note, BLOOM_SCALE_DORIAN);
+    bloom_harmony_init(&harmony, cfg.track[2].note, BLOOM_SCALE_DORIAN);
     display_init();
     outputs_init();
     panel_init();

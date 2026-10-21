@@ -20,7 +20,7 @@ no hardware dependency.
 ```text
 1 ms timer / MIDI transport
         |
-bounded scheduler ---- note-off/gate-off queue (current fixed four-slot form)
+bounded 72-event scheduler ---- ratchets / note-off / gate-off
         |
 track engine: fractal | Turing | Euclidean | future engines
         |
@@ -36,6 +36,18 @@ No engine allocates memory. Fractal branches are computed lazily from
 sequences. A track's current, original and undo trunks occupy bounded static
 arrays. PRNG state is explicit and serializable.
 
+The scheduler keeps the inactive main-loop path O(1) through a cached next
+deadline. Scheduling is atomic: a whole ratchet group is rejected before any
+event is inserted if capacity is insufficient. Events with equal deadlines use
+a monotonic insertion order, and transport stop clears the queue before forcing
+all notes/gates off.
+
+The portable `JBLM` project codec is independent of flash I/O. Version 1 is
+1,880 bytes and includes global harmony, four engine assignments, clock ratios,
+seeds, Turing registers and all four 64-step trunks. CRC32 and semantic range
+validation reject damaged records. Device-slot integration remains disabled
+until storage ownership is independently verified.
+
 ## Verified modeled capabilities
 
 The v0.8.0 contract models three pitch CV, three mod CV and three gate outputs
@@ -47,7 +59,7 @@ makes no voltage-range or 1V/oct hardware claim.
 
 ## Current limitations
 
-The first vertical slice uses the upstream millisecond scheduler and fixed
-one-note-per-track state. Ratchet fields are generated but not scheduled yet.
-External MIDI/analog clock, full UI pages, versioned generative persistence,
-calibrated CV, ornaments and advanced engines remain future work. See roadmap.
+The first vertical slice still uses millisecond timing and one active MIDI note
+per logical track, but ratchet subdivisions are now scheduled safely. External
+MIDI/analog clock, full UI pages, installed generative persistence, calibrated
+CV and grace-note/slew scheduling remain future work. See roadmap.

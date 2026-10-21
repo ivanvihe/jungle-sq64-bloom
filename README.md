@@ -22,16 +22,22 @@ that flashing is safe. See `docs/HARDWARE_SAFETY.md`.
 - Sequential, reverse, alternating, deterministic-random, weighted and evolving paths.
 - Controlled persistent mutation with undo and original-trunk restore.
 - 1–64-step Euclidean patterns, pulses and rotation.
+- Fixed-capacity ratchet scheduler with ordered note-on/off events and overflow rejection.
+- Random Walk, Weighted Random, first/second-order Markov, arpeggiator and harmonic progression engines.
+- Versioned 1,880-byte generative project codec with CRC32 corruption detection.
 - ARM firmware image with A/B/C pitch, gate, mod and MIDI routing and D trigger/MIDI routing inherited from the verified emulator interface.
 - CSV diagnostic output and an accelerated 30-minute deterministic test.
 - VSB packaging and SQ-64 specification image validation.
 
 In the firmware's normal page, `PATTERN` switches between the compatibility
 Euclidean layer and the prototype generative layer. In the generative layer,
-track A is fractal, B is Turing, and C/D remain Euclidean. `SHIFT+PATTERN`
-reseeds A/B; `SHIFT+STOP` freezes or releases mutation. These deliberately
-small mappings provide an emulator-playable vertical slice while the full page
-system is developed.
+track A is fractal, B is Turing, C has six selectable engines, and D remains
+Euclidean percussion. `SHIFT+PATTERN` reseeds A/B/C; `SHIFT+STOP` freezes or
+releases evolution. These deliberately small mappings provide an
+emulator-playable vertical slice while the full page system is developed.
+
+While track C is selected, `SHIFT+C` cycles its live engine through Euclidean,
+Random Walk, Weighted Random, Markov, arpeggiator and harmonic modes.
 
 ## Build and test
 
@@ -58,6 +64,8 @@ npm run dev
 Open the local URL, load the VSB in **Browser emulator**, press Power, then
 PLAY. Press PATTERN to enable Bloom/Turing playback. Nothing in this workflow
 requires or authorizes a physical device update.
+
+See `docs/EMULATOR_SESSION.md` for the exact acceptance checklist and controls.
 
 For a readable event stream:
 

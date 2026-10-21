@@ -39,9 +39,10 @@ HDRS = $(wildcard src/*.h)
 
 HOST_CC ?= cc
 HOST_CFLAGS ?= -std=c11 -O2 -g -Wall -Wextra -Werror -pedantic
-ENGINE_SRCS = firmware/core/prng.c firmware/music/quantizer.c \
+ENGINE_SRCS = firmware/core/prng.c firmware/core/scheduler.c firmware/music/quantizer.c \
               firmware/engines/euclidean.c firmware/engines/turing.c \
-              firmware/engines/fractal.c
+              firmware/engines/fractal.c firmware/engines/generative.c \
+              firmware/storage/project_codec.c
 
 all: build/$(FIRMWARE_NAME).vsb
 
@@ -73,6 +74,7 @@ test: build/$(FIRMWARE_NAME).vsb
 	$(PYTHON) tests/emulator/test_generative.py --emulator $(EMULATOR_DIR) --image $<
 	node tools/browser_update_test.mjs $(EMULATOR_DIR)/web $<
 	node tools/browser_panel_test.mjs $(EMULATOR_DIR)/web $<
+	node tests/emulator/browser_generative_test.mjs $(EMULATOR_DIR)/web $<
 
 build/host_tests: tests/unit/test_main.c $(ENGINE_SRCS)
 	@mkdir -p build

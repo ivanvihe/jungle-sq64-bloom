@@ -22,6 +22,7 @@ typedef struct {
     uint32_t seed;
     uint32_t previous_seed;
     uint32_t bar;
+    uint32_t temporary_epoch;
     uint8_t length;
     uint8_t depth;
     uint8_t branch;
@@ -34,6 +35,7 @@ typedef struct {
     uint8_t root;
     bool frozen;
     bool undo_valid;
+    bool temporary_active;
 } bloom_fractal_t;
 
 void bloom_fractal_init(bloom_fractal_t *f, uint32_t seed, uint8_t length,
@@ -43,6 +45,7 @@ bloom_step_t bloom_fractal_step(const bloom_fractal_t *f, uint32_t absolute_step
 void bloom_fractal_mutate(bloom_fractal_t *f, uint32_t epoch, bool persistent);
 bool bloom_fractal_undo(bloom_fractal_t *f);
 void bloom_fractal_restore(bloom_fractal_t *f);
+void bloom_fractal_clear_temporary(bloom_fractal_t *f);
 void bloom_fractal_reseed(bloom_fractal_t *f, uint32_t seed, bool notes, bool rhythm);
 
 #endif

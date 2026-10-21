@@ -11,11 +11,11 @@ exact project behavior/test, not copied firmware behavior.
 | Mutation range | Controlled note variation | Scale-aware probability/intensity/range, persistent undo/restore | Engine tested; UI partial |
 | Reseed | New sequence | Deterministic track reseed; note/rhythm preservation API | Tested; global UI partial |
 | Per-step tune | Note, gate, slew, ratchet, mod | Step structure carries all except scheduled slew | Partial |
-| Ratchets/trills | Clock-synced per-step ornaments | Ratchet generation exists; real-time subdivision queue pending | Not validated |
-| Probabilistic mute/slew | Per-step probability features | Probability fields exist; scheduler use pending | Partial |
+| Ratchets/trills | Clock-synced per-step ornaments | 1–8 ratchets use bounded note-on/off scheduling; trills pending | Ratchets tested |
+| Probabilistic mute/slew | Per-step probability features | Deterministic probability is active; slew scheduling pending | Partial |
 | Mod output | Per-channel synced modulation/LFO/envelope | Three modeled SQ-64 mod streams; voltage/calibration unknown | Basic stepped mod inherited |
 | MIDI output | Sequence output over TRS MIDI | USB and DIN modeled; active note-off balancing inherited | Basic emulator smoke |
-| Save/recall branches | Persistent saved sequences | Legacy projects do not yet include generative state | Not implemented |
+| Save/recall branches | Persistent saved sequences | Versioned codec exists; not wired to unverified physical slots | Partial/blocked |
 | Editor/import/export | Browser editor and USB files | CSV diagnostic only; no project editor | Partial |
 
 Qu-Bit's internal fractal and mutation algorithms are not public. Parity claims
