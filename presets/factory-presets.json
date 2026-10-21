@@ -1,0 +1,42 @@
+{
+  "format": "jungle-sq64-bloom-presets",
+  "version": 1,
+  "status": "design defaults; loader not implemented",
+  "presets": [
+    {
+      "name": "AMBIENT GARDEN",
+      "tempo": 62,
+      "scale": "dorian",
+      "fractal": {"depth": 4, "path": "evolving", "mutation": 5, "returnToTrunk": 35},
+      "turing": {"length": 16, "mutation": 3, "rest": 45}
+    },
+    {
+      "name": "HYPNOTIC TECHNO",
+      "tempo": 132,
+      "scale": "natural-minor",
+      "fractal": {"depth": 2, "path": "alternating", "mutation": 4, "returnToTrunk": 55},
+      "turing": {"length": 8, "mutation": 2, "rest": 5}
+    },
+    {
+      "name": "DUB TECHNO",
+      "tempo": 124,
+      "scale": "dorian",
+      "fractal": {"depth": 3, "path": "weighted", "mutation": 6, "returnToTrunk": 45},
+      "turing": {"length": 12, "mutation": 3, "rest": 30}
+    },
+    {
+      "name": "STOOR CHAOS",
+      "tempo": 138,
+      "scale": "phrygian",
+      "fractal": {"depth": 8, "path": "random", "mutation": 28, "returnToTrunk": 12},
+      "turing": {"length": 23, "mutation": 22, "rest": 18}
+    },
+    {
+      "name": "FRACTAL BLOOM",
+      "tempo": 108,
+      "scale": "major-pentatonic",
+      "fractal": {"depth": 7, "path": "sequential", "mutation": 12, "returnToTrunk": 20},
+      "turing": {"length": 13, "mutation": 8, "rest": 12}
+    }
+  ]
+}
