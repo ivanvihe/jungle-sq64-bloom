@@ -29,6 +29,9 @@
 #include "panel.h"
 #include "storage.h"
 #include "updater.h"
+#include "../firmware/engines/euclidean.h"
+#include "../firmware/engines/fractal.h"
+#include "../firmware/engines/turing.h"
 
 /* The browser engine's patched TCI interpreter has a fixed translation
  * budget per basic block (about 120 simple instructions, fewer for
@@ -58,6 +61,11 @@ static uint32_t beat_flash_ms;
 static uint32_t tap_last_ms;
 static bool ui_dirty = true;
 static volatile bool rt_start, rt_stop;
+static bloom_fractal_t fractal;
+static bloom_turing_t turing;
+static bool generative_mode;
+static bool generative_frozen;
+static uint32_t generation_seed = 0x4a534236u;
 
 /* Edit modes (MODE-001): the PITCH/GATE/MOD/CONTROL keys scope what the
  * pads edit on the selected track; pressing the active mode's key again
@@ -89,21 +97,20 @@ static uint32_t step_period256(void) { return (15000u << 8) / cfg.bpm; }
 
 static uint64_t euclid_pattern(const track_cfg_t *t)
 {
-    uint64_t bits = 0;
-    for (int i = 0; i < t->length; i++) {
-        int j = (i + t->length - t->rotate) % t->length;
-        if ((j * t->pulses) % t->length < t->pulses)
-            bits |= 1ull << i;
-    }
-    return bits;
+    return bloom_euclidean_pattern(t->length, t->pulses, t->rotate);
+}
+
+static void send_note_velocity(int track, uint8_t status, uint8_t note, uint8_t velocity)
+{
+    uint8_t channel = track < 3 ? (uint8_t)track : 9;
+    uint8_t msg[3] = {(uint8_t)(status | channel), note,
+                      status == 0x90 ? velocity : 0};
+    midi_send(msg, 3);
 }
 
 static void send_note(int track, uint8_t status, uint8_t note)
 {
-    uint8_t channel = track < 3 ? (uint8_t)track : 9;
-    uint8_t velocity = status == 0x90 ? cfg.track[track].velocity : 0;
-    uint8_t msg[3] = {(uint8_t)(status | channel), note, velocity};
-    midi_send(msg, 3);
+    send_note_velocity(track, status, note, cfg.track[track].velocity);
 }
 
 static void note_off(int track)
@@ -123,16 +130,32 @@ static void fire_step(uint32_t now)
     for (int t = 0; t < 4; t++) {
         const track_cfg_t *c = &cfg.track[t];
         int pos = (int)(global_step % c->length);
-        if (!((euclid_pattern(c) >> pos) & 1)) continue;
+        uint8_t note = c->note;
+        uint8_t velocity = c->velocity;
+        uint8_t gate_pct = c->gate_pct;
+        uint8_t mod = (uint8_t)(c->mod * 17);
+        bool hit = ((euclid_pattern(c) >> pos) & 1u) != 0;
+        if (generative_mode && t == 0) {
+            if (!(global_step % 16u)) bloom_fractal_select_branch(&fractal, global_step / 16u);
+            bloom_step_t s = bloom_fractal_step(&fractal, global_step);
+            hit = (s.flags & BLOOM_STEP_ENABLED) != 0;
+            note = s.note;
+            velocity = s.velocity;
+            gate_pct = s.gate;
+            mod = s.modulation;
+        } else if (generative_mode && t == 1) {
+            hit = bloom_turing_tick(&turing, &note, &velocity);
+        }
+        if (!hit) continue;
         note_off(t);
-        send_note(t, 0x90, c->note);
-        active_note[t] = c->note;
-        uint32_t gate = period * c->gate_pct / 100;
+        send_note_velocity(t, 0x90, note, velocity);
+        active_note[t] = note;
+        uint32_t gate = period * gate_pct / 100;
         gate_off_ms[t] = now + (gate < 5 ? 5 : gate);
         if (t < 3) {
             gate_set(t, true);
-            cv_pitch(t, c->note);
-            cv_mod(t, (uint8_t)(c->mod * 17));
+            cv_pitch(t, note);
+            cv_mod(t, mod);
         } else {
             panel_triggers(1);
             trigger_off_ms = now + 20;
@@ -333,7 +356,24 @@ static NOINLINE void handle_events(void)
             }
             continue;
         case SW_PLAY: transport_start(); continue;
-        case SW_STOP: transport_stop(); continue;
+        case SW_STOP:
+            if (panel_down(SW_SHIFT)) {
+                generative_frozen = !generative_frozen;
+                fractal.frozen = generative_frozen;
+                turing.frozen = generative_frozen;
+                ui_dirty = true;
+            } else transport_stop();
+            continue;
+        case SW_PATTERN:
+            if (panel_down(SW_SHIFT)) {
+                generation_seed += 0x9e3779b9u;
+                bloom_fractal_reseed(&fractal, generation_seed, true, true);
+                bloom_turing_reseed(&turing, generation_seed ^ 0x5455524eu);
+            } else {
+                generative_mode = !generative_mode;
+            }
+            ui_dirty = true;
+            continue;
         case SW_TAP: {
             uint32_t now = g_ms;
             uint32_t gap = now - tap_last_ms;
@@ -499,7 +539,7 @@ static NOINLINE void draw_ui(void)
     }
     const track_cfg_t *c = &cfg.track[cfg.selected];
     fb_clear();
-    fb_text(2, 1, "EUCLID", 15);
+    fb_text(2, 1, generative_mode ? "BLOOM" : "EUCLID", 15);
     fb_number(60, 1, cfg.bpm, 12);
     fb_text(84, 1, "BPM", 8);
     fb_text(118, 1, "SWING", 8);
@@ -564,6 +604,7 @@ static NOINLINE void draw_ui(void)
     fb_text(46, 57, "BAR", 5);
     fb_number(70, 57, edit_bar + 1, 5);
     if (loop_on) fb_text(84, 57, "LOOP", 12);
+    if (generative_frozen) fb_text(116, 57, "FREEZE", 12);
     fb_text(168, 57, "GLOBAL SAVES", 5);
     display_flush();
 }
@@ -592,6 +633,15 @@ static void realtime_in(uint8_t byte)
 static NOINLINE void normal_main(void)
 {
     settings_load(&cfg);
+    bloom_fractal_init(&fractal, generation_seed, cfg.track[0].length,
+                       cfg.track[0].note, BLOOM_SCALE_DORIAN);
+    fractal.path = BLOOM_PATH_ALTERNATING;
+    bloom_turing_init(&turing, generation_seed ^ 0x5455524eu, 13);
+    turing.root = cfg.track[1].note;
+    turing.low_note = cfg.track[1].note;
+    turing.high_note = (uint8_t)(cfg.track[1].note > 103 ? 127 : cfg.track[1].note + 24);
+    turing.scale = BLOOM_SCALE_NATURAL_MINOR;
+    turing.mutation = 8;
     display_init();
     outputs_init();
     panel_init();
